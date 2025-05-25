@@ -18,7 +18,6 @@ const WaitForCallProfile: React.FC = () => {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'registered' | 'waiting' | 'in-call' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState<number>(0);
-  const [callType, setCallType] = useState<'audio' | 'video' | null>(null);
   const [isTestingDevices, setIsTestingDevices] = useState(false);
   const [hasLocalStream, setHasLocalStream] = useState(false);
   const callTimer = useRef<NodeJS.Timeout | null>(null);
@@ -28,7 +27,6 @@ const WaitForCallProfile: React.FC = () => {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoCallRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
 
   const testCameraAndMic = async () => {
@@ -45,10 +43,9 @@ const WaitForCallProfile: React.FC = () => {
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
       }
-      
-      console.log('Requesting media permissions...');
+       console.log('Requesting media permissions...');
       const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
+        video: {
           width: { ideal: 1280 },
           height: { ideal: 720 }
         }, 
@@ -192,26 +189,19 @@ const WaitForCallProfile: React.FC = () => {
           // Get access to session description handler immediately
           const sessionDescriptionHandler: any = invitation.sessionDescriptionHandler;
           console.log('Patient sessionDescriptionHandler available:', !!sessionDescriptionHandler);
-          
-          // Detect call type from SDP offer
-          const offer = sessionDescriptionHandler?.remoteSessionDescription?.sdp || '';
-          const isVideoCall = offer.includes('m=video');
-          const callTypeDetected = isVideoCall ? 'video' : 'audio';
-          console.log('🎯 Patient detected call type:', callTypeDetected);
-          setCallType(callTypeDetected);
 
-          // First, ensure we have local stream
+          // First, ensure we have local stream for video call
           if (!localStreamRef.current) {
             try {
               console.log('Patient getting local stream for call...');
               const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: callTypeDetected === 'video',
+                video: true,
                 audio: true 
               });
               console.log('Patient got local stream:', stream.getTracks().map(t => `${t.kind}: ${t.label}`));
               localStreamRef.current = stream;
-              setHasLocalStream(callTypeDetected === 'video');
-              if (localVideoRef.current && callTypeDetected === 'video') {
+              setHasLocalStream(true);
+              if (localVideoRef.current) {
                 localVideoRef.current.srcObject = stream;
               }
             } catch (err) {
@@ -250,7 +240,7 @@ const WaitForCallProfile: React.FC = () => {
               console.error('❌ Patient localStreamRef.current is null!');
             }
 
-            // Handle incoming remote streams - declare in wider scope
+            // Handle incoming remote streams
             const patientRemoteStream = new MediaStream();
             sessionDescriptionHandler.peerConnection.ontrack = (event: RTCTrackEvent) => {
               console.log('🎯 Patient received remote track:', event.track.kind, event.track.label, event.track.id);
@@ -260,9 +250,9 @@ const WaitForCallProfile: React.FC = () => {
               
               console.log('Patient remote stream after adding track:', patientRemoteStream.getTracks().length);
               
-              // Update the video element when we receive tracks - with retry mechanism
+              // Update the video element when we receive tracks
               const setRemoteVideo = () => {
-                if (callTypeDetected === 'video' && remoteVideoRef.current) {
+                if (remoteVideoRef.current) {
                   console.log('🎥 Patient setting remote stream with', patientRemoteStream.getTracks().length, 'tracks to VIDEO element');
                   remoteVideoRef.current.srcObject = patientRemoteStream;
                   
@@ -275,22 +265,9 @@ const WaitForCallProfile: React.FC = () => {
                       console.error('❌ Patient remote video play error:', error);
                     });
                   }
-                } else if (callTypeDetected === 'audio' && remoteAudioRef.current) {
-                  console.log('🔊 Patient setting remote stream with', patientRemoteStream.getTracks().length, 'tracks to AUDIO element');
-                  remoteAudioRef.current.srcObject = patientRemoteStream;
-                  
-                  // Ensure audio plays
-                  if (event.track.kind === 'audio') {
-                    console.log('🎵 Patient trying to play remote audio');
-                    remoteAudioRef.current.play().then(() => {
-                      console.log('✅ Patient remote audio playing successfully');
-                    }).catch((error) => {
-                      console.error('❌ Patient remote audio play error:', error);
-                    });
-                  }
                 } else {
-                  console.log('⏳ Patient media element is null, retrying in 100ms...');
-                  // Retry after a short delay if audio/video element isn't ready yet
+                  console.log('⏳ Patient video element is null, retrying in 100ms...');
+                  // Retry after a short delay if video element isn't ready yet
                   setTimeout(setRemoteVideo, 100);
                 }
               };
@@ -313,10 +290,10 @@ const WaitForCallProfile: React.FC = () => {
               setTimeout(() => {
                 // Ensure local video is displayed during call
                 if (localStreamRef.current) {
-                  setHasLocalStream(callTypeDetected === 'video');
+                  setHasLocalStream(true);
                   
-                  // Set stream on the in-call video element for video calls
-                  if (callTypeDetected === 'video' && localVideoCallRef.current) {
+                  // Set stream on the in-call video element
+                  if (localVideoCallRef.current) {
                     console.log('Setting stream on localVideoCallRef for in-call');
                     localVideoCallRef.current.srcObject = localStreamRef.current;
                     localVideoCallRef.current.autoplay = true;
@@ -330,8 +307,8 @@ const WaitForCallProfile: React.FC = () => {
                     });
                   }
                   
-                  // Also keep the preview video element updated for video calls
-                  if (callTypeDetected === 'video' && localVideoRef.current) {
+                  // Also keep the preview video element updated
+                  if (localVideoRef.current) {
                     localVideoRef.current.srcObject = localStreamRef.current;
                     localVideoRef.current.play().catch(console.error);
                   }
@@ -342,16 +319,15 @@ const WaitForCallProfile: React.FC = () => {
               const sessionDescriptionHandler: any = invitation.sessionDescriptionHandler;
               if (sessionDescriptionHandler) {
                 const patientRemoteStream = sessionDescriptionHandler._patientRemoteStream;
-                const targetElement = callTypeDetected === 'video' ? remoteVideoRef.current : remoteAudioRef.current;
                 
                 // Check if we already have a remote stream from ontrack events
-                if (!targetElement?.srcObject && patientRemoteStream && patientRemoteStream.getTracks().length > 0) {
-                  console.log('🔍 Patient: Setting accumulated remote stream to', callTypeDetected, 'element...');
-                  if (targetElement) {
-                    targetElement.srcObject = patientRemoteStream;
-                    targetElement.play().catch(console.error);
+                if (!remoteVideoRef.current?.srcObject && patientRemoteStream && patientRemoteStream.getTracks().length > 0) {
+                  console.log('🔍 Patient: Setting accumulated remote stream to video element...');
+                  if (remoteVideoRef.current) {
+                    remoteVideoRef.current.srcObject = patientRemoteStream;
+                    remoteVideoRef.current.play().catch(console.error);
                   }
-                } else if (!targetElement?.srcObject) {
+                } else if (!remoteVideoRef.current?.srcObject) {
                   console.log('🔍 Patient: No remote stream from ontrack, checking existing receivers...');
                   const remoteStream = new MediaStream();
                   sessionDescriptionHandler.peerConnection.getReceivers().forEach((receiver: any) => {
@@ -361,22 +337,20 @@ const WaitForCallProfile: React.FC = () => {
                     }
                   });
                   
-                  if (remoteStream.getTracks().length > 0 && targetElement) {
+                  if (remoteStream.getTracks().length > 0 && remoteVideoRef.current) {
                     console.log('🎥 Patient: Setting fallback remote stream with', remoteStream.getTracks().length, 'tracks');
-                    targetElement.srcObject = remoteStream;
-                    targetElement.play().catch(console.error);
+                    remoteVideoRef.current.srcObject = remoteStream;
+                    remoteVideoRef.current.play().catch(console.error);
                   }
                 }
               }
             } else if (state === SessionState.Terminated) {
               setStatus('waiting');
               setCallDuration(0);
-              setCallType(null);
               if (callTimer.current) clearInterval(callTimer.current);
               
               // Don't clear local video when call ends, keep it for preview
               if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-              if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
               
               // Keep local stream active for preview
               if (localStreamRef.current) {
@@ -385,13 +359,13 @@ const WaitForCallProfile: React.FC = () => {
             }
           });
 
-          // Now accept the call with the constraints
+          // Now accept the call with video constraints
           console.log('📞 Patient accepting the call...');
           invitation.accept({
             sessionDescriptionHandlerOptions: {
               constraints: {
                 audio: true,
-                video: callTypeDetected === 'video'
+                video: true
               }
             }
           }).catch((err) => {
@@ -438,15 +412,11 @@ const WaitForCallProfile: React.FC = () => {
       if (localVideoCallRef.current) {
         localVideoCallRef.current.srcObject = null;
       }
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = null;
-      }
       localStreamRef.current = null;
     }
     setStatus('idle');
     setHasLocalStream(false);
     setIsTestingDevices(false);
-    setCallType(null);
     setError(null);
   };
 
@@ -603,85 +573,59 @@ const WaitForCallProfile: React.FC = () => {
         {status === 'in-call' && (
           <Box display="flex" flexDirection="column" alignItems="center" gap={2}>
             <Typography variant="h6" color="primary">
-              In call with doctor ({callType})
+              In video call with doctor
             </Typography>
             <Typography variant="body1" mb={2}>
               Duration: {callDuration}s
             </Typography>
             
-            {callType === 'video' && (
-              <Box display="flex" gap={2} justifyContent="center" width="100%">
-                <Box>
-                  <Typography variant="caption" display="block" mb={1}>Your camera</Typography>
-                  <Box sx={{
-                    width: 240,
-                    height: 180,
-                    backgroundColor: '#000',
-                    border: '1px solid #ccc',
-                    borderRadius: 1,
-                    overflow: 'hidden'
-                  }}>
-                    <video 
-                      ref={localVideoCallRef}
-                      autoPlay 
-                      muted 
-                      playsInline
-                      style={{ 
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover'
-                      }} 
-                    />
-                  </Box>
-                </Box>
-                <Box>
-                  <Typography variant="caption" display="block" mb={1}>Doctor's camera</Typography>
-                  <Box sx={{
-                    width: 480,
-                    height: 360,
-                    backgroundColor: '#000',
-                    border: '1px solid #ccc',
-                    borderRadius: 1,
-                    overflow: 'hidden'
-                  }}>
-                    <video 
-                      ref={remoteVideoRef}
-                      autoPlay 
-                      playsInline
-                      style={{ 
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover'
-                      }} 
-                    />
-                  </Box>
-                </Box>
-              </Box>
-            )}
-            
-            {callType === 'audio' && (
-              <Box display="flex" flexDirection="column" alignItems="center" gap={3} sx={{ py: 4 }}>
-                <Box sx={{ 
-                  fontSize: '4rem',
-                  mb: 2 
+            <Box display="flex" gap={2} justifyContent="center" width="100%">
+              <Box>
+                <Typography variant="caption" display="block" mb={1}>Your camera</Typography>
+                <Box sx={{
+                  width: 240,
+                  height: 180,
+                  backgroundColor: '#000',
+                  border: '1px solid #ccc',
+                  borderRadius: 1,
+                  overflow: 'hidden'
                 }}>
-                  🎙️
+                  <video 
+                    ref={localVideoCallRef}
+                    autoPlay 
+                    muted 
+                    playsInline
+                    style={{ 
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover'
+                    }} 
+                  />
                 </Box>
-                <Typography variant="h5" color="primary">
-                  Audio Call in Progress
-                </Typography>
-                <Typography variant="body1" color="text.secondary" sx={{ textAlign: 'center' }}>
-                  You are connected with the doctor.<br />
-                  You can hear each other's voice.
-                </Typography>
-                {/* Hidden audio element for playing remote audio */}
-                <audio 
-                  ref={remoteAudioRef}
-                  autoPlay
-                  style={{ display: 'none' }}
-                />
               </Box>
-            )}
+              <Box>
+                <Typography variant="caption" display="block" mb={1}>Doctor's camera</Typography>
+                <Box sx={{
+                  width: 480,
+                  height: 360,
+                  backgroundColor: '#000',
+                  border: '1px solid #ccc',
+                  borderRadius: 1,
+                  overflow: 'hidden'
+                }}>
+                  <video 
+                    ref={remoteVideoRef}
+                    autoPlay 
+                    playsInline
+                    style={{ 
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover'
+                    }} 
+                  />
+                </Box>
+              </Box>
+            </Box>
           </Box>
         )}
 

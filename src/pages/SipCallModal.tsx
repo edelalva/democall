@@ -18,7 +18,6 @@ const SipCallModal = function (props: SipCallModalProps) {
     const { open, onClose, clientId, clientName } = props;
     const [status, setStatus] = useState<'idle' | 'connecting' | 'registered' | 'calling' | 'in-call' | 'error'>('idle');
     const [error, setError] = useState<string | null>(null);
-    const [callType, setCallType] = useState<'audio' | 'video' | null>(null);
     const [callDuration, setCallDuration] = useState<number>(0);
     const [isTestingDevices, setIsTestingDevices] = useState(false);
     const [hasLocalStream, setHasLocalStream] = useState(false);
@@ -26,7 +25,6 @@ const SipCallModal = function (props: SipCallModalProps) {
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const localVideoCallRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
-    const remoteAudioRef = useRef<HTMLAudioElement>(null);
     const userAgentRef = useRef<UserAgent | null>(null);
     const registererRef = useRef<Registerer | null>(null);
     const sessionRef = useRef<Session | null>(null);
@@ -42,12 +40,8 @@ const SipCallModal = function (props: SipCallModalProps) {
                 if (localVideoRef.current) {
                     localVideoRef.current.srcObject = null;
                 }
-                if (remoteAudioRef.current) {
-                    remoteAudioRef.current.srcObject = null;
-                }
             }
             setStatus('idle');
-            setCallType(null);
             setCallDuration(0);
             setError(null);
             setHasLocalStream(false);
@@ -112,36 +106,33 @@ const SipCallModal = function (props: SipCallModalProps) {
         }
     };
 
-    const handleCall = async (type: 'audio' | 'video') => {
+    const handleCall = async () => {
         try {
             if (clientId === DOCTOR_USER) {
                 setError('You cannot call yourself.');
                 return;
             }
 
-            // Request camera access before starting the call for video calls
-            if (type === 'video') {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                    localStreamRef.current = stream;
-                    setHasLocalStream(true);
-                    if (localVideoRef.current) {
-                        localVideoRef.current.srcObject = stream;
-                        // Ensure video plays
-                        try {
-                            await localVideoRef.current.play();
-                        } catch (playError) {
-                            console.error('Error playing video during call setup:', playError);
-                        }
+            // Request camera access before starting the call
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localStreamRef.current = stream;
+                setHasLocalStream(true);
+                if (localVideoRef.current) {
+                    localVideoRef.current.srcObject = stream;
+                    // Ensure video plays
+                    try {
+                        await localVideoRef.current.play();
+                    } catch (playError) {
+                        console.error('Error playing video during call setup:', playError);
                     }
-                } catch (err) {
-                    console.error('Failed to access camera:', err);
-                    setError('Failed to access camera. Please make sure your camera is connected and you have granted permission to use it.');
-                    return;
                 }
+            } catch (err) {
+                console.error('Failed to access camera:', err);
+                setError('Failed to access camera. Please make sure your camera is connected and you have granted permission to use it.');
+                return;
             }
 
-            setCallType(type);
             setStatus('calling');
             setError(null);
 
@@ -155,12 +146,12 @@ const SipCallModal = function (props: SipCallModalProps) {
             // If we don't have a local stream yet, get one
             if (!localStreamRef.current) {
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    video: type === 'video',
+                    video: true,
                     audio: true 
                 });
                 localStreamRef.current = stream;
-                setHasLocalStream(type === 'video');
-                if (localVideoRef.current && type === 'video') {
+                setHasLocalStream(true);
+                if (localVideoRef.current) {
                     localVideoRef.current.srcObject = stream;
                     try {
                         await localVideoRef.current.play();
@@ -177,14 +168,14 @@ const SipCallModal = function (props: SipCallModalProps) {
                 sessionDescriptionHandlerOptions: {
                     constraints: {
                         audio: true,
-                        video: type === 'video'
+                        video: true
                     }
                 }
             });
 
             sessionRef.current = inviter;
 
-            console.log('🚀 Doctor: Created inviter with constraints:', { audio: true, video: type === 'video' });
+            console.log('🚀 Doctor: Created inviter with video constraints');
 
             // Set up session state handler for call state management  
             inviter.stateChange.addListener((state) => {
@@ -208,7 +199,7 @@ const SipCallModal = function (props: SipCallModalProps) {
                             
                             // Update the video element when we receive tracks - with retry mechanism
                             const setRemoteVideo = () => {
-                                if (callType === 'video' && remoteVideoRef.current) {
+                                if (remoteVideoRef.current) {
                                     console.log('🎥 Doctor setting remote stream with', doctorRemoteStream.getTracks().length, 'tracks to VIDEO element');
                                     remoteVideoRef.current.srcObject = doctorRemoteStream;
                                     
@@ -221,22 +212,9 @@ const SipCallModal = function (props: SipCallModalProps) {
                                             console.error('❌ Doctor remote video play error:', error);
                                         });
                                     }
-                                } else if (callType === 'audio' && remoteAudioRef.current) {
-                                    console.log('🔊 Doctor setting remote stream with', doctorRemoteStream.getTracks().length, 'tracks to AUDIO element');
-                                    remoteAudioRef.current.srcObject = doctorRemoteStream;
-                                    
-                                    // Ensure audio plays
-                                    if (event.track.kind === 'audio') {
-                                        console.log('🎵 Doctor trying to play remote audio');
-                                        remoteAudioRef.current.play().then(() => {
-                                            console.log('✅ Doctor remote audio playing successfully');
-                                        }).catch((error) => {
-                                            console.error('❌ Doctor remote audio play error:', error);
-                                        });
-                                    }
                                 } else {
-                                    console.log('⏳ Doctor media element is null, retrying in 100ms...');
-                                    // Retry after a short delay if audio/video element isn't ready yet
+                                    console.log('⏳ Doctor video element is null, retrying in 100ms...');
+                                    // Retry after a short delay if video element isn't ready yet
                                     setTimeout(setRemoteVideo, 100);
                                 }
                             };
@@ -279,8 +257,8 @@ const SipCallModal = function (props: SipCallModalProps) {
 
                     // Small delay to ensure DOM is updated before setting video
                     setTimeout(() => {
-                        // Ensure local video is displayed during call for video calls
-                        if (type === 'video' && localStreamRef.current) {
+                        // Ensure local video is displayed during call
+                        if (localStreamRef.current) {
                             console.log('✅ Setting up local video for in-call state...');
                             setHasLocalStream(true);
                             
@@ -315,14 +293,13 @@ const SipCallModal = function (props: SipCallModalProps) {
                     const sessionDescriptionHandler: any = inviter.sessionDescriptionHandler;
                     if (sessionDescriptionHandler && sessionDescriptionHandler.peerConnection) {
                         // Check if we already have a remote stream from ontrack events
-                        const targetElement = callType === 'video' ? remoteVideoRef.current : remoteAudioRef.current;
-                        if (!targetElement?.srcObject && doctorRemoteStream.getTracks().length > 0) {
-                            console.log('🔍 Setting accumulated remote stream to', callType, 'element...');
-                            if (targetElement) {
-                                targetElement.srcObject = doctorRemoteStream;
-                                targetElement.play().catch(console.error);
+                        if (!remoteVideoRef.current?.srcObject && doctorRemoteStream.getTracks().length > 0) {
+                            console.log('🔍 Setting accumulated remote stream to video element...');
+                            if (remoteVideoRef.current) {
+                                remoteVideoRef.current.srcObject = doctorRemoteStream;
+                                remoteVideoRef.current.play().catch(console.error);
                             }
-                        } else if (!targetElement?.srcObject) {
+                        } else if (!remoteVideoRef.current?.srcObject) {
                             console.log('🔍 No remote stream from ontrack, checking existing receivers...');
                             const remoteStream = new MediaStream();
                             sessionDescriptionHandler.peerConnection.getReceivers().forEach((receiver: any) => {
@@ -332,22 +309,20 @@ const SipCallModal = function (props: SipCallModalProps) {
                                 }
                             });
                             
-                            if (remoteStream.getTracks().length > 0 && targetElement) {
+                            if (remoteStream.getTracks().length > 0 && remoteVideoRef.current) {
                                 console.log('🎥 Setting fallback remote stream with', remoteStream.getTracks().length, 'tracks');
-                                targetElement.srcObject = remoteStream;
-                                targetElement.play().catch(console.error);
+                                remoteVideoRef.current.srcObject = remoteStream;
+                                remoteVideoRef.current.play().catch(console.error);
                             }
                         }
                     }
                 } else if (state === SessionState.Terminated) {
                     setStatus('registered');
-                    setCallType(null);
                     setCallDuration(0);
                     if (callTimer.current) clearInterval(callTimer.current);
 
                     // Only clear remote video when call ends, keep local stream for preview
                     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-                    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
                     
                     // Keep local stream active for preview if we have one
                     if (localStreamRef.current) {
@@ -357,7 +332,7 @@ const SipCallModal = function (props: SipCallModalProps) {
             });
 
             // Now make the actual call
-            console.log('📞 Doctor making the invite call...');
+            console.log('📞 Doctor making the video call...');
             inviter.invite().catch((err: any) => {
                 console.error('❌ Call failed:', err);
                 setError('Call failed: ' + err);
@@ -374,7 +349,6 @@ const SipCallModal = function (props: SipCallModalProps) {
             sessionRef.current.bye();
         }
         setStatus('registered');
-        setCallType(null);
         setCallDuration(0);
         if (callTimer.current) clearInterval(callTimer.current);
     };
@@ -526,15 +500,14 @@ const SipCallModal = function (props: SipCallModalProps) {
                             </Box>
                         </Box>
                         <Box display="flex" gap={2}>
-                            <Button variant="contained" color="primary" onClick={() => handleCall('audio')}>Audio Call</Button>
-                            <Button variant="contained" color="secondary" onClick={() => handleCall('video')}>Video Call</Button>
+                            <Button variant="contained" color="primary" onClick={handleCall}>Video Call</Button>
                         </Box>
                     </Box>
                 )}
                 {status === 'calling' && (
                     <Box>
                         <Typography>Calling {clientName}...</Typography>
-                        {callType === 'video' && hasLocalStream && (
+                        {hasLocalStream && (
                             <Box sx={{ mt: 2 }}>
                                 <Typography variant="caption" display="block" mb={1}>Your camera (preview)</Typography>
                                 <Box sx={{
@@ -563,72 +536,54 @@ const SipCallModal = function (props: SipCallModalProps) {
                 )}
                 {status === 'in-call' && (
                     <Box>
-                        <Typography>In call with {clientName} ({callType})</Typography>
+                        <Typography>In video call with {clientName}</Typography>
                         <Typography>Duration: {callDuration}s</Typography>
                         <Box display="flex" gap={2} mt={2}>
-                            {callType === 'video' && (
-                                <Box>
-                                    <Typography variant="caption" display="block" mb={1}>Your camera</Typography>
-                                    <Box sx={{
-                                        width: 240,
-                                        height: 180,
-                                        backgroundColor: '#000',
-                                        border: '1px solid #ccc',
-                                        borderRadius: 1,
-                                        overflow: 'hidden'
-                                    }}>
-                                        <video 
-                                            ref={localVideoCallRef} 
-                                            autoPlay 
-                                            muted 
-                                            playsInline 
-                                            style={{ 
-                                                width: '100%', 
-                                                height: '100%',
-                                                objectFit: 'cover'
-                                            }} 
-                                        />
-                                    </Box>
-                                </Box>
-                            )}
-                            {callType === 'video' && (
-                                <Box>
-                                    <Typography variant="caption" display="block" mb={1}>Patient's camera</Typography>
-                                    <Box sx={{
-                                        width: 480,
-                                        height: 360,
-                                        backgroundColor: '#000',
-                                        border: '1px solid #ccc',
-                                        borderRadius: 1,
-                                        overflow: 'hidden'
-                                    }}>
-                                        <video 
-                                            ref={remoteVideoRef} 
-                                            autoPlay 
-                                            playsInline 
-                                            style={{ 
-                                                width: '100%', 
-                                                height: '100%',
-                                                objectFit: 'cover'
-                                            }} 
-                                        />
-                                    </Box>
-                                </Box>
-                            )}
-                            {callType === 'audio' && (
-                                <Box display="flex" flexDirection="column" alignItems="center" gap={2}>
-                                    <Typography variant="h6">Audio Call in Progress</Typography>
-                                    <Typography variant="body2" color="text.secondary">
-                                        🎤 You can hear each other's voice
-                                    </Typography>
-                                    {/* Hidden audio element for playing remote audio */}
-                                    <audio 
-                                        ref={remoteAudioRef}
-                                        autoPlay
-                                        style={{ display: 'none' }}
+                            <Box>
+                                <Typography variant="caption" display="block" mb={1}>Your camera</Typography>
+                                <Box sx={{
+                                    width: 240,
+                                    height: 180,
+                                    backgroundColor: '#000',
+                                    border: '1px solid #ccc',
+                                    borderRadius: 1,
+                                    overflow: 'hidden'
+                                }}>
+                                    <video 
+                                        ref={localVideoCallRef} 
+                                        autoPlay 
+                                        muted 
+                                        playsInline 
+                                        style={{ 
+                                            width: '100%', 
+                                            height: '100%',
+                                            objectFit: 'cover'
+                                        }} 
                                     />
                                 </Box>
-                            )}
+                            </Box>
+                            <Box>
+                                <Typography variant="caption" display="block" mb={1}>Patient's camera</Typography>
+                                <Box sx={{
+                                    width: 480,
+                                    height: 360,
+                                    backgroundColor: '#000',
+                                    border: '1px solid #ccc',
+                                    borderRadius: 1,
+                                    overflow: 'hidden'
+                                }}>
+                                    <video 
+                                        ref={remoteVideoRef} 
+                                        autoPlay 
+                                        playsInline 
+                                        style={{ 
+                                            width: '100%', 
+                                            height: '100%',
+                                            objectFit: 'cover'
+                                        }} 
+                                    />
+                                </Box>
+                            </Box>
                         </Box>
                     </Box>
                 )}
