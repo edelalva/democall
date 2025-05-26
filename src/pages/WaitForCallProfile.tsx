@@ -1,6 +1,26 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Typography, Box, CircularProgress, Button } from '@mui/material';
+import { 
+  Typography, 
+  Box, 
+  CircularProgress, 
+  Button, 
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Slider,
+  IconButton
+} from '@mui/material';
+import { 
+  VideoCall as VideoCallIcon,
+  Settings as SettingsIcon,
+  VolumeUp as VolumeUpIcon 
+} from '@mui/icons-material';
 import { UserAgent, Registerer, Invitation, SessionState, UserAgentOptions } from 'sip.js';
 import { getClientName } from '../clientNameMap';
 
@@ -20,6 +40,13 @@ const WaitForCallProfile: React.FC = () => {
   const [callDuration, setCallDuration] = useState<number>(0);
   const [isTestingDevices, setIsTestingDevices] = useState(false);
   const [hasLocalStream, setHasLocalStream] = useState(false);
+  const [showTestDialog, setShowTestDialog] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [availableMicrophones, setAvailableMicrophones] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
+  const [selectedMicrophone, setSelectedMicrophone] = useState<string>('');
+  const [microphoneVolume, setMicrophoneVolume] = useState<number>(50);
+  const [audioLevel, setAudioLevel] = useState<number>(0);
   const callTimer = useRef<NodeJS.Timeout | null>(null);
   const userAgentRef = useRef<UserAgent | null>(null);
   const registererRef = useRef<Registerer | null>(null);
@@ -28,6 +55,158 @@ const WaitForCallProfile: React.FC = () => {
   const localVideoCallRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const testVideoRef = useRef<HTMLVideoElement>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micMonitorRef = useRef<number | null>(null);
+
+  // Get available devices
+  const getDevices = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cameras = devices.filter(device => device.kind === 'videoinput');
+      const microphones = devices.filter(device => device.kind === 'audioinput');
+      
+      setAvailableCameras(cameras);
+      setAvailableMicrophones(microphones);
+      
+      // Set default devices
+      if (cameras.length > 0 && !selectedCamera) {
+        setSelectedCamera(cameras[0].deviceId);
+      }
+      if (microphones.length > 0 && !selectedMicrophone) {
+        setSelectedMicrophone(microphones[0].deviceId);
+      }
+    } catch (err) {
+      console.error('Failed to get devices:', err);
+    }
+  };
+
+  // Monitor microphone audio levels
+  const startAudioMonitoring = (stream: MediaStream) => {
+    try {
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const microphone = audioContext.createMediaStreamSource(stream);
+      
+      analyser.fftSize = 256;
+      microphone.connect(analyser);
+      
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      
+      const updateAudioLevel = () => {
+        if (analyserRef.current) {
+          analyserRef.current.getByteFrequencyData(dataArray);
+          const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+          setAudioLevel(Math.min(100, (average / 128) * 100));
+          
+          micMonitorRef.current = requestAnimationFrame(updateAudioLevel);
+        }
+      };
+      
+      updateAudioLevel();
+    } catch (err) {
+      console.error('Failed to start audio monitoring:', err);
+    }
+  };
+
+  // Stop audio monitoring
+  const stopAudioMonitoring = () => {
+    if (micMonitorRef.current) {
+      cancelAnimationFrame(micMonitorRef.current);
+      micMonitorRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    setAudioLevel(0);
+  };
+
+  // Open test dialog
+  const openTestDialog = async () => {
+    setShowTestDialog(true);
+    await getDevices();
+  };
+
+  // Test devices with selected camera and microphone
+  const testSelectedDevices = async () => {
+    try {
+      setError(null);
+      setIsTestingDevices(true);
+      
+      // Clear previous stream
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
+        localStreamRef.current = null;
+      }
+      
+      stopAudioMonitoring();
+      
+      const constraints: MediaStreamConstraints = {
+        video: selectedCamera ? { deviceId: { exact: selectedCamera } } : true,
+        audio: selectedMicrophone ? { deviceId: { exact: selectedMicrophone } } : true
+      };
+      
+      console.log('Requesting media with constraints:', constraints);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      console.log('Got test stream:', stream.getTracks().map(t => `${t.kind}: ${t.label}`));
+      localStreamRef.current = stream;
+      
+      if (testVideoRef.current) {
+        testVideoRef.current.srcObject = stream;
+        await testVideoRef.current.play();
+      }
+      
+      // Start audio monitoring
+      startAudioMonitoring(stream);
+      
+    } catch (err) {
+      console.error('Device test failed:', err);
+      setError(err instanceof Error ? err.message : 'Failed to access selected devices');
+    } finally {
+      setIsTestingDevices(false);
+    }
+  };
+
+  // Close test dialog
+  const closeTestDialog = () => {
+    stopAudioMonitoring();
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (testVideoRef.current) {
+      testVideoRef.current.srcObject = null;
+    }
+    setShowTestDialog(false);
+  };
+
+  // Apply tested devices and close dialog
+  const applyDeviceSettings = () => {
+    setHasLocalStream(!!localStreamRef.current);
+    if (localStreamRef.current && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      localVideoRef.current.play().catch(console.error);
+    }
+    stopAudioMonitoring();
+    setShowTestDialog(false);
+  };
+
+  // Effect to test devices when selection changes
+  useEffect(() => {
+    if (showTestDialog && (selectedCamera || selectedMicrophone)) {
+      testSelectedDevices();
+    }
+  }, [selectedCamera, selectedMicrophone, showTestDialog]);
 
   const testCameraAndMic = async () => {
     try {
@@ -457,66 +636,57 @@ const WaitForCallProfile: React.FC = () => {
               Click below to let the doctor know you're here for your appointment
             </Typography>
             
-            <Button 
-              variant="outlined"
-              disabled={isTestingDevices}
-              onClick={testCameraAndMic}
-              sx={{ mb: 2 }}
-            >
-              {isTestingDevices ? (
-                <>
-                  <CircularProgress size={16} sx={{ mr: 1 }} />
-                  Testing Devices...
-                </>
-              ) : (
-                'Test Camera & Microphone'
-              )}
-            </Button>
-            
-            <Box sx={{ mt: 2, minHeight: 200 }}>
-              <Typography variant="caption" display="block" mb={1}>
-                {hasLocalStream ? 'Your camera preview' : 'Camera preview will appear here'}
-              </Typography>
-              <Box sx={{
-                width: 240,
-                height: 180,
-                backgroundColor: hasLocalStream ? '#000' : '#f5f5f5',
-                border: '1px solid #ccc',
-                borderRadius: 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                position: 'relative'
-              }}>
-                <video 
-                  ref={localVideoRef} 
-                  autoPlay 
-                  muted 
-                  playsInline 
-                  style={{ 
-                    width: '100%', 
-                    height: '100%',
-                    objectFit: 'cover',
-                    borderRadius: 4,
-                    display: hasLocalStream ? 'block' : 'none'
-                  }} 
-                />
-                {!hasLocalStream && (
-                  <Typography variant="body2" color="textSecondary" sx={{ textAlign: 'center', p: 2 }}>
-                    Click "Test Camera & Microphone" to see your video preview
-                  </Typography>
-                )}
-              </Box>
+            <Box display="flex" alignItems="center" gap={2}>
+              <Button 
+                variant="contained" 
+                color="primary" 
+                size="large"
+                onClick={startRegistration}
+                startIcon={<VideoCallIcon />}
+              >
+                Let Doctor Know I'm Here
+              </Button>
+              
+              <IconButton 
+                color="primary"
+                onClick={openTestDialog}
+                sx={{ 
+                  bgcolor: 'primary.light',
+                  '&:hover': { bgcolor: 'primary.main', color: 'white' }
+                }}
+              >
+                <SettingsIcon />
+              </IconButton>
             </Box>
             
-            <Button 
-              variant="contained" 
-              color="primary" 
-              size="large"
-              onClick={startRegistration}
-            >
-              Let Doctor Know I'm Here
-            </Button>
+            {hasLocalStream && (
+              <Box sx={{ mt: 3 }}>
+                <Typography variant="caption" display="block" mb={1}>
+                  Your camera preview
+                </Typography>
+                <Box sx={{
+                  width: 240,
+                  height: 180,
+                  backgroundColor: '#000',
+                  border: '1px solid #ccc',
+                  borderRadius: 1,
+                  overflow: 'hidden',
+                  mx: 'auto'
+                }}>
+                  <video 
+                    ref={localVideoRef} 
+                    autoPlay 
+                    muted 
+                    playsInline 
+                    style={{ 
+                      width: '100%', 
+                      height: '100%',
+                      objectFit: 'cover'
+                    }} 
+                  />
+                </Box>
+              </Box>
+            )}
           </Box>
         )}
 
@@ -628,6 +798,131 @@ const WaitForCallProfile: React.FC = () => {
             </Box>
           </Box>
         )}
+
+        {/* Device Test Dialog */}
+        <Dialog 
+          open={showTestDialog} 
+          onClose={closeTestDialog}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>
+            Test Camera & Microphone
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2 }}>
+              {/* Camera Selection */}
+              <FormControl fullWidth>
+                <InputLabel>Camera</InputLabel>
+                <Select
+                  value={selectedCamera}
+                  label="Camera"
+                  onChange={(e) => setSelectedCamera(e.target.value)}
+                >
+                  {availableCameras.map((camera) => (
+                    <MenuItem key={camera.deviceId} value={camera.deviceId}>
+                      {camera.label || `Camera ${camera.deviceId.slice(0, 8)}...`}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              {/* Microphone Selection */}
+              <FormControl fullWidth>
+                <InputLabel>Microphone</InputLabel>
+                <Select
+                  value={selectedMicrophone}
+                  label="Microphone"
+                  onChange={(e) => setSelectedMicrophone(e.target.value)}
+                >
+                  {availableMicrophones.map((microphone) => (
+                    <MenuItem key={microphone.deviceId} value={microphone.deviceId}>
+                      {microphone.label || `Microphone ${microphone.deviceId.slice(0, 8)}...`}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
+              {/* Video Preview */}
+              <Box>
+                <Typography variant="subtitle2" gutterBottom>
+                  Camera Preview
+                </Typography>
+                <Box sx={{
+                  width: '100%',
+                  height: 300,
+                  backgroundColor: '#000',
+                  border: '1px solid #ccc',
+                  borderRadius: 1,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <video 
+                    ref={testVideoRef}
+                    autoPlay 
+                    muted 
+                    playsInline
+                    style={{ 
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover'
+                    }} 
+                  />
+                </Box>
+              </Box>
+
+              {/* Microphone Level Monitor */}
+              <Box>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                  <VolumeUpIcon />
+                  <Typography variant="subtitle2">
+                    Microphone Level
+                  </Typography>
+                </Box>
+                <Box sx={{
+                  width: '100%',
+                  height: 20,
+                  backgroundColor: '#f5f5f5',
+                  border: '1px solid #ccc',
+                  borderRadius: 1,
+                  overflow: 'hidden',
+                  position: 'relative'
+                }}>
+                  <Box sx={{
+                    width: `${audioLevel}%`,
+                    height: '100%',
+                    backgroundColor: audioLevel > 70 ? '#f44336' : audioLevel > 40 ? '#ff9800' : '#4caf50',
+                    transition: 'width 0.1s ease'
+                  }} />
+                </Box>
+                <Typography variant="caption" color="textSecondary">
+                  Speak into your microphone to test the audio level
+                </Typography>
+              </Box>
+
+              {isTestingDevices && (
+                <Box display="flex" alignItems="center" justifyContent="center" gap={2}>
+                  <CircularProgress size={20} />
+                  <Typography>Testing devices...</Typography>
+                </Box>
+              )}
+            </Box>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeTestDialog}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={applyDeviceSettings} 
+              variant="contained"
+              disabled={!localStreamRef.current}
+            >
+              Use These Settings
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         {error && (
           <Typography 
