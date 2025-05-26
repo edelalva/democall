@@ -470,14 +470,15 @@ const SipCallModal = function (props: SipCallModalProps) {
                             </Typography>
                             <Box sx={{
                                 width: 240,
-                                height: 180,
+                                height: 240,
                                 backgroundColor: hasLocalStream ? '#000' : '#f5f5f5',
                                 border: '1px solid #ccc',
                                 borderRadius: 1,
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',
-                                position: 'relative'
+                                position: 'relative',
+                                mx: 'auto'
                             }}>
                                 <video 
                                     ref={localVideoRef} 
@@ -512,11 +513,12 @@ const SipCallModal = function (props: SipCallModalProps) {
                                 <Typography variant="caption" display="block" mb={1}>Your camera (preview)</Typography>
                                 <Box sx={{
                                     width: 240,
-                                    height: 180,
+                                    height: 240,
                                     backgroundColor: '#000',
                                     border: '1px solid #ccc',
                                     borderRadius: 1,
-                                    overflow: 'hidden'
+                                    overflow: 'hidden',
+                                    mx: 'auto'
                                 }}>
                                     <video 
                                         ref={localVideoRef} 

@@ -666,7 +666,7 @@ const WaitForCallProfile: React.FC = () => {
                 </Typography>
                 <Box sx={{
                   width: 240,
-                  height: 180,
+                  height: 240,
                   backgroundColor: '#000',
                   border: '1px solid #ccc',
                   borderRadius: 1,
@@ -705,31 +705,6 @@ const WaitForCallProfile: React.FC = () => {
             <Typography variant="body1" color="text.secondary">
               Please wait for the doctor to start the call
             </Typography>
-            {hasLocalStream && (
-              <Box>
-                <Typography variant="caption" display="block" mb={1}>Your camera preview</Typography>
-                <Box sx={{
-                  width: 240,
-                  height: 180,
-                  backgroundColor: '#000',
-                  border: '1px solid #ccc',
-                  borderRadius: 1,
-                  overflow: 'hidden'
-                }}>
-                  <video 
-                    ref={localVideoRef}
-                    autoPlay 
-                    muted 
-                    playsInline
-                    style={{ 
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover'
-                    }} 
-                  />
-                </Box>
-              </Box>
-            )}
             <Button 
               variant="outlined" 
               color="primary" 
@@ -811,95 +786,100 @@ const WaitForCallProfile: React.FC = () => {
           </DialogTitle>
           <DialogContent>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, pt: 2 }}>
-              {/* Camera Selection */}
-              <FormControl fullWidth>
-                <InputLabel>Camera</InputLabel>
-                <Select
-                  value={selectedCamera}
-                  label="Camera"
-                  onChange={(e) => setSelectedCamera(e.target.value)}
-                >
-                  {availableCameras.map((camera) => (
-                    <MenuItem key={camera.deviceId} value={camera.deviceId}>
-                      {camera.label || `Camera ${camera.deviceId.slice(0, 8)}...`}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              {/* Main Layout: Left (Device Controls) + Right (Camera Preview) */}
+              <Box sx={{ display: 'flex', gap: 3 }}>
+                {/* Left Column: Device Selection */}
+                <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {/* Camera Selection */}
+                  <FormControl fullWidth>
+                    <InputLabel>Camera</InputLabel>
+                    <Select
+                      value={selectedCamera}
+                      label="Camera"
+                      onChange={(e) => setSelectedCamera(e.target.value)}
+                    >
+                      {availableCameras.map((camera) => (
+                        <MenuItem key={camera.deviceId} value={camera.deviceId}>
+                          {camera.label || `Camera ${camera.deviceId.slice(0, 8)}...`}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
 
-              {/* Microphone Selection */}
-              <FormControl fullWidth>
-                <InputLabel>Microphone</InputLabel>
-                <Select
-                  value={selectedMicrophone}
-                  label="Microphone"
-                  onChange={(e) => setSelectedMicrophone(e.target.value)}
-                >
-                  {availableMicrophones.map((microphone) => (
-                    <MenuItem key={microphone.deviceId} value={microphone.deviceId}>
-                      {microphone.label || `Microphone ${microphone.deviceId.slice(0, 8)}...`}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+                  {/* Microphone Selection */}
+                  <FormControl fullWidth>
+                    <InputLabel>Microphone</InputLabel>
+                    <Select
+                      value={selectedMicrophone}
+                      label="Microphone"
+                      onChange={(e) => setSelectedMicrophone(e.target.value)}
+                    >
+                      {availableMicrophones.map((microphone) => (
+                        <MenuItem key={microphone.deviceId} value={microphone.deviceId}>
+                          {microphone.label || `Microphone ${microphone.deviceId.slice(0, 8)}...`}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
 
-              {/* Video Preview */}
-              <Box>
-                <Typography variant="subtitle2" gutterBottom>
-                  Camera Preview
-                </Typography>
-                <Box sx={{
-                  width: '100%',
-                  height: 300,
-                  backgroundColor: '#000',
-                  border: '1px solid #ccc',
-                  borderRadius: 1,
-                  overflow: 'hidden',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <video 
-                    ref={testVideoRef}
-                    autoPlay 
-                    muted 
-                    playsInline
-                    style={{ 
+                  {/* Microphone Level Monitor */}
+                  <Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                      <VolumeUpIcon 
+                        fontSize="small"
+                        color={audioLevel > 10 ? 'primary' : 'disabled'} 
+                      />
+                      <Typography variant="body2">
+                        Microphone: {audioLevel > 10 ? 'Good' : 'Speak to test'}
+                      </Typography>
+                    </Box>
+                    <Box sx={{
                       width: '100%',
-                      height: '100%',
-                      objectFit: 'cover'
-                    }} 
-                  />
+                      height: 8,
+                      backgroundColor: '#f0f0f0',
+                      borderRadius: 4,
+                      overflow: 'hidden'
+                    }}>
+                      <Box sx={{
+                        width: `${Math.max(2, audioLevel)}%`,
+                        height: '100%',
+                        backgroundColor: audioLevel > 60 ? '#f44336' : audioLevel > 20 ? '#4caf50' : '#e0e0e0',
+                        transition: 'width 0.1s ease, background-color 0.2s ease',
+                        borderRadius: 'inherit'
+                      }} />
+                    </Box>
+                  </Box>
                 </Box>
-              </Box>
 
-              {/* Microphone Level Monitor */}
-              <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                  <VolumeUpIcon />
-                  <Typography variant="subtitle2">
-                    Microphone Level
+                {/* Right Column: Camera Preview */}
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="subtitle2" gutterBottom>
+                    Camera Preview
                   </Typography>
-                </Box>
-                <Box sx={{
-                  width: '100%',
-                  height: 20,
-                  backgroundColor: '#f5f5f5',
-                  border: '1px solid #ccc',
-                  borderRadius: 1,
-                  overflow: 'hidden',
-                  position: 'relative'
-                }}>
                   <Box sx={{
-                    width: `${audioLevel}%`,
-                    height: '100%',
-                    backgroundColor: audioLevel > 70 ? '#f44336' : audioLevel > 40 ? '#ff9800' : '#4caf50',
-                    transition: 'width 0.1s ease'
-                  }} />
+                    width: '100%',
+                    height: 240,
+                    backgroundColor: '#000',
+                    border: '1px solid #ccc',
+                    borderRadius: 1,
+                    overflow: 'hidden',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    <video 
+                      ref={testVideoRef}
+                      autoPlay 
+                      muted 
+                      playsInline
+                      style={{ 
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover'
+                      }} 
+                    />
+                  </Box>
                 </Box>
-                <Typography variant="caption" color="textSecondary">
-                  Speak into your microphone to test the audio level
-                </Typography>
               </Box>
 
               {isTestingDevices && (
