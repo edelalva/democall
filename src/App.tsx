@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Admin, Resource, Layout, Menu, MenuItemLink, List } from 'react-admin';
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import dataProvider from './dataProvider';
@@ -27,6 +27,10 @@ function AdminApp() {
 }
 
 function App() {
+    useEffect(() => {
+        document.title = 'Patient Management System';
+    }, []);
+
     return (
         <BrowserRouter>
             <Routes>

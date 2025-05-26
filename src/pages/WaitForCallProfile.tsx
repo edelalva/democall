@@ -19,10 +19,32 @@ import {
 import { 
   VideoCall as VideoCallIcon,
   Settings as SettingsIcon,
-  VolumeUp as VolumeUpIcon 
+  VolumeUp as VolumeUpIcon,
+  CallEnd as CallEndIcon,
+  Mic as MicIcon,
+  MicOff as MicOffIcon,
+  Videocam as VideocamIcon,
+  VideocamOff as VideocamOffIcon,
+  PlayArrow as PlayArrowIcon
 } from '@mui/icons-material';
 import { UserAgent, Registerer, Invitation, SessionState, UserAgentOptions } from 'sip.js';
 import { getClientName } from '../clientNameMap';
+
+// Add CSS animations
+const styles = `
+  @keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+  }
+`;
+
+// Inject styles into document head
+if (typeof document !== 'undefined') {
+  const styleSheet = document.createElement('style');
+  styleSheet.textContent = styles;
+  document.head.appendChild(styleSheet);
+}
 
 const SIP_WS = 'wss://fs1.sn.wizher.com:7443';
 const SIP_REALM = 'fs1.sn.wizher.com';
@@ -47,6 +69,17 @@ const WaitForCallProfile: React.FC = () => {
   const [selectedMicrophone, setSelectedMicrophone] = useState<string>('');
   const [microphoneVolume, setMicrophoneVolume] = useState<number>(50);
   const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [needsAudioUnlock, setNeedsAudioUnlock] = useState<boolean>(false);
+  
+  // Persistent mute and camera states with localStorage
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    const stored = localStorage.getItem('sipCallMuted');
+    return stored ? JSON.parse(stored) : false;
+  });
+  const [isCameraDisabled, setIsCameraDisabled] = useState<boolean>(() => {
+    const stored = localStorage.getItem('sipCallCameraDisabled');
+    return stored ? JSON.parse(stored) : false;
+  });
   const callTimer = useRef<NodeJS.Timeout | null>(null);
   const userAgentRef = useRef<UserAgent | null>(null);
   const registererRef = useRef<Registerer | null>(null);
@@ -130,6 +163,114 @@ const WaitForCallProfile: React.FC = () => {
     setAudioLevel(0);
   };
 
+  // Enable audio playback with user gesture
+  const enableAudioPlayback = async () => {
+    console.log('🔊 Patient: User gesture detected - enabling audio playback');
+    setNeedsAudioUnlock(false);
+    
+    // Force play the remote video element
+    if (remoteVideoRef.current) {
+      try {
+        remoteVideoRef.current.muted = false;
+        remoteVideoRef.current.volume = 1.0;
+        await remoteVideoRef.current.play();
+        console.log('✅ Patient: Audio playback enabled successfully with user gesture');
+      } catch (error) {
+        console.error('❌ Patient: Failed to enable audio playback:', error);
+      }
+    }
+    
+    // Resume any suspended audio context
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      try {
+        await audioContextRef.current.resume();
+        console.log('✅ Patient: Audio context resumed');
+      } catch (error) {
+        console.error('❌ Patient: Failed to resume audio context:', error);
+      }
+    }
+  };
+
+  // Apply mute and camera settings to a stream (for testing only, not for initial call streams)
+  const applyStreamSettings = (stream: MediaStream) => {
+    const audioTracks = stream.getAudioTracks();
+    const videoTracks = stream.getVideoTracks();
+    
+    audioTracks.forEach(track => {
+      track.enabled = !isMuted;
+    });
+    
+    videoTracks.forEach(track => {
+      track.enabled = !isCameraDisabled;
+    });
+  };
+
+  // Apply current settings to live call stream (called during active calls only)
+  const applyCallStreamSettings = (stream: MediaStream) => {
+    const audioTracks = stream.getAudioTracks();
+    const videoTracks = stream.getVideoTracks();
+    
+    // For calls, ensure audio is enabled by default (unmuted) regardless of saved state
+    // The user can mute manually using the toggle button
+    audioTracks.forEach(track => {
+      track.enabled = true;
+    });
+    
+    videoTracks.forEach(track => {
+      track.enabled = !isCameraDisabled;
+    });
+  };
+
+  // Toggle mute function
+  const toggleMute = () => {
+    const newMutedState = !isMuted;
+    setIsMuted(newMutedState);
+    localStorage.setItem('sipCallMuted', JSON.stringify(newMutedState));
+    
+    // Apply to local stream
+    if (localStreamRef.current) {
+      const audioTracks = localStreamRef.current.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !newMutedState;
+      });
+    }
+    
+    // Apply to WebRTC senders if in call
+    if (sessionRef.current?.sessionDescriptionHandler?.peerConnection) {
+      const senders = sessionRef.current.sessionDescriptionHandler.peerConnection.getSenders();
+      senders.forEach((sender: RTCRtpSender) => {
+        if (sender.track && sender.track.kind === 'audio') {
+          sender.track.enabled = !newMutedState;
+        }
+      });
+    }
+  };
+
+  // Toggle camera function
+  const toggleCamera = () => {
+    const newCameraDisabledState = !isCameraDisabled;
+    setIsCameraDisabled(newCameraDisabledState);
+    localStorage.setItem('sipCallCameraDisabled', JSON.stringify(newCameraDisabledState));
+    
+    // Apply to local stream
+    if (localStreamRef.current) {
+      const videoTracks = localStreamRef.current.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = !newCameraDisabledState;
+      });
+    }
+    
+    // Apply to WebRTC senders if in call
+    if (sessionRef.current?.sessionDescriptionHandler?.peerConnection) {
+      const senders = sessionRef.current.sessionDescriptionHandler.peerConnection.getSenders();
+      senders.forEach((sender: RTCRtpSender) => {
+        if (sender.track && sender.track.kind === 'video') {
+          sender.track.enabled = !newCameraDisabledState;
+        }
+      });
+    }
+  };
+
   // Open test dialog
   const openTestDialog = async () => {
     setShowTestDialog(true);
@@ -157,6 +298,9 @@ const WaitForCallProfile: React.FC = () => {
       
       console.log('Requesting media with constraints:', constraints);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // Apply mute and camera settings
+      applyStreamSettings(stream);
       
       console.log('Got test stream:', stream.getTracks().map(t => `${t.kind}: ${t.label}`));
       localStreamRef.current = stream;
@@ -192,11 +336,21 @@ const WaitForCallProfile: React.FC = () => {
 
   // Apply tested devices and close dialog
   const applyDeviceSettings = () => {
-    setHasLocalStream(!!localStreamRef.current);
+    // Don't set hasLocalStream to true here to prevent unwanted preview
     if (localStreamRef.current && localVideoRef.current) {
       localVideoRef.current.srcObject = localStreamRef.current;
       localVideoRef.current.play().catch(console.error);
     }
+    
+    // Stop the test stream to prevent it from continuing
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
+    }
+    if (testVideoRef.current) {
+      testVideoRef.current.srcObject = null;
+    }
+    
     stopAudioMonitoring();
     setShowTestDialog(false);
   };
@@ -230,6 +384,9 @@ const WaitForCallProfile: React.FC = () => {
         }, 
         audio: true 
       });
+      
+      // Apply mute and camera settings
+      applyStreamSettings(stream);
       
       console.log('Got media stream:', stream.getTracks().map(t => `${t.kind}: ${t.label}`));
       localStreamRef.current = stream;
@@ -317,6 +474,10 @@ const WaitForCallProfile: React.FC = () => {
           }, 
           audio: true 
         });
+        
+        // For calls, ensure audio is enabled by default
+        applyCallStreamSettings(stream);
+        
         console.log('Camera access granted:', stream.getTracks().map(t => t.kind));
         localStreamRef.current = stream;
         setHasLocalStream(true);
@@ -365,6 +526,10 @@ const WaitForCallProfile: React.FC = () => {
           setStatus('in-call');
           sessionRef.current = invitation;
           
+          // Reset mute state to false when starting a call to ensure audio works
+          setIsMuted(false);
+          localStorage.setItem('sipCallMuted', JSON.stringify(false));
+          
           // Get access to session description handler immediately
           const sessionDescriptionHandler: any = invitation.sessionDescriptionHandler;
           console.log('Patient sessionDescriptionHandler available:', !!sessionDescriptionHandler);
@@ -377,6 +542,10 @@ const WaitForCallProfile: React.FC = () => {
                 video: true,
                 audio: true 
               });
+              
+              // For calls, ensure audio is enabled by default
+              applyCallStreamSettings(stream);
+              
               console.log('Patient got local stream:', stream.getTracks().map(t => `${t.kind}: ${t.label}`));
               localStreamRef.current = stream;
               setHasLocalStream(true);
@@ -388,80 +557,106 @@ const WaitForCallProfile: React.FC = () => {
             }
           }
 
-          // Set up peer connection handling IMMEDIATELY
-          if (sessionDescriptionHandler && sessionDescriptionHandler.peerConnection) {
-            console.log('✅ Patient: SessionDescriptionHandler available, setting up peer connection');
-            
-            // Add peer connection state debugging
-            sessionDescriptionHandler.peerConnection.onconnectionstatechange = () => {
-              console.log('🔗 Patient peer connection state:', sessionDescriptionHandler.peerConnection.connectionState);
-            };
-
-            sessionDescriptionHandler.peerConnection.oniceconnectionstatechange = () => {
-              console.log('🧊 Patient ICE connection state:', sessionDescriptionHandler.peerConnection.iceConnectionState);
-            };
-
-            // CRITICAL: Add all local tracks to peer connection BEFORE accepting
-            if (localStreamRef.current) {
-              console.log('🚀 Patient adding local tracks to peer connection...');
-              localStreamRef.current.getTracks().forEach(track => {
-                console.log('🎤🎥 Patient adding local track:', track.kind, track.label, track.id);
-                sessionDescriptionHandler.peerConnection.addTrack(track, localStreamRef.current!);
-              });
-              
-              // Debug: Check what senders we have
-              const senders = sessionDescriptionHandler.peerConnection.getSenders();
-              console.log('📤 Patient senders after adding tracks:', senders.length);
-              senders.forEach((sender: any, index: number) => {
-                console.log(`Patient sender ${index}:`, sender.track?.kind, sender.track?.label);
-              });
-            } else {
-              console.error('❌ Patient localStreamRef.current is null!');
-            }
-
-            // Handle incoming remote streams
-            const patientRemoteStream = new MediaStream();
-            sessionDescriptionHandler.peerConnection.ontrack = (event: RTCTrackEvent) => {
-              console.log('🎯 Patient received remote track:', event.track.kind, event.track.label, event.track.id);
-              console.log('Patient remote stream before adding track:', patientRemoteStream.getTracks().length);
-              
-              patientRemoteStream.addTrack(event.track);
-              
-              console.log('Patient remote stream after adding track:', patientRemoteStream.getTracks().length);
-              
-              // Update the video element when we receive tracks
-              const setRemoteVideo = () => {
-                if (remoteVideoRef.current) {
-                  console.log('🎥 Patient setting remote stream with', patientRemoteStream.getTracks().length, 'tracks to VIDEO element');
-                  remoteVideoRef.current.srcObject = patientRemoteStream;
-                  
-                  // Ensure video plays for video tracks
-                  if (event.track.kind === 'video') {
-                    console.log('🎬 Patient trying to play remote video');
-                    remoteVideoRef.current.play().then(() => {
-                      console.log('✅ Patient remote video playing successfully');
-                    }).catch((error) => {
-                      console.error('❌ Patient remote video play error:', error);
-                    });
-                  }
-                } else {
-                  console.log('⏳ Patient video element is null, retrying in 100ms...');
-                  // Retry after a short delay if video element isn't ready yet
-                  setTimeout(setRemoteVideo, 100);
-                }
-              };
-              
-              setRemoteVideo();
-            };
-
-            // Store reference for use in fallback
-            (sessionDescriptionHandler as any)._patientRemoteStream = patientRemoteStream;
-          } else {
-            console.error('❌ Patient sessionDescriptionHandler or peerConnection is null immediately!');
-          }
+          // Create a persistent remote stream that will accumulate tracks
+          let patientRemoteStream = new MediaStream();
 
           invitation.stateChange.addListener((state) => {
-            if (state === SessionState.Established) {
+            console.log(`🎯 Patient session state changed to: ${state}`);
+            
+            if (state === SessionState.Initial || state === SessionState.Establishing) {
+              // Access sessionDescriptionHandler when it becomes available
+              const sessionDescriptionHandler: any = invitation.sessionDescriptionHandler;
+              if (sessionDescriptionHandler && sessionDescriptionHandler.peerConnection) {
+                console.log('✅ Patient: SessionDescriptionHandler available, setting up peer connection');
+                
+                // Add peer connection state debugging
+                sessionDescriptionHandler.peerConnection.onconnectionstatechange = () => {
+                  console.log('🔗 Patient peer connection state:', sessionDescriptionHandler.peerConnection.connectionState);
+                };
+
+                sessionDescriptionHandler.peerConnection.oniceconnectionstatechange = () => {
+                  console.log('🧊 Patient ICE connection state:', sessionDescriptionHandler.peerConnection.iceConnectionState);
+                };
+
+                // CRITICAL: Add all local tracks to peer connection BEFORE accepting
+                if (localStreamRef.current) {
+                  console.log('🚀 Patient adding local tracks to peer connection...');
+                  localStreamRef.current.getTracks().forEach(track => {
+                    console.log('🎤🎥 Patient adding local track:', track.kind, track.label, track.id);
+                    sessionDescriptionHandler.peerConnection.addTrack(track, localStreamRef.current!);
+                  });
+                  
+                  // Debug: Check what senders we have
+                  const senders = sessionDescriptionHandler.peerConnection.getSenders();
+                  console.log('📤 Patient senders after adding tracks:', senders.length);
+                  senders.forEach((sender: any, index: number) => {
+                    console.log(`Patient sender ${index}:`, sender.track?.kind, sender.track?.label);
+                  });
+                } else {
+                  console.error('❌ Patient localStreamRef.current is null!');
+                }
+
+                // Handle incoming remote streams
+                sessionDescriptionHandler.peerConnection.ontrack = (event: RTCTrackEvent) => {
+                  console.log('🎯 Patient received remote track:', event.track.kind, event.track.label, event.track.id);
+                  console.log('Patient remote stream before adding track:', patientRemoteStream.getTracks().length);
+                  
+                  patientRemoteStream.addTrack(event.track);
+                  
+                  console.log('Patient remote stream after adding track:', patientRemoteStream.getTracks().length);
+                  
+                  // Update the video element when we receive tracks
+                  const setRemoteVideo = () => {
+                    if (remoteVideoRef.current) {
+                      console.log('🎥 Patient setting remote stream with', patientRemoteStream.getTracks().length, 'tracks to VIDEO element');
+                      remoteVideoRef.current.srcObject = patientRemoteStream;
+                      
+                      // CRITICAL FIX: Always play the video element when we receive ANY track (audio or video)
+                      // This ensures both audio and video tracks are played
+                      console.log('🎬 Patient trying to play remote media (track kind:', event.track.kind + ')');
+                      
+                      // For audio tracks, ensure they are enabled
+                      if (event.track.kind === 'audio') {
+                        console.log('🔊 Patient: Ensuring audio track is enabled for playback');
+                        event.track.enabled = true;
+                        
+                        // Set volume to maximum to ensure audio is audible
+                        if (remoteVideoRef.current) {
+                          remoteVideoRef.current.volume = 1.0;
+                          remoteVideoRef.current.muted = false;
+                        }
+                      }
+                      
+                      remoteVideoRef.current.play().then(() => {
+                        console.log('✅ Patient remote media playing successfully');
+                        // Additional check for audio playback
+                        if (event.track.kind === 'audio' && remoteVideoRef.current) {
+                          console.log('🔊 Patient: Audio track should now be playing, volume:', remoteVideoRef.current.volume, 'muted:', remoteVideoRef.current.muted);
+                        }
+                      }).catch((error) => {
+                        console.error('❌ Patient remote media play error:', error);
+                        // If autoplay fails, user interaction might be required
+                        if (error.name === 'NotAllowedError' || error.message.includes('play')) {
+                          console.log('🔴 Patient: Autoplay blocked - user interaction required');
+                          setNeedsAudioUnlock(true);
+                        }
+                      });
+                    } else {
+                      console.log('⏳ Patient video element is null, retrying in 100ms...');
+                      // Retry after a short delay if video element isn't ready yet
+                      setTimeout(setRemoteVideo, 100);
+                    }
+                  };
+                  
+                  setRemoteVideo();
+                };
+
+                // Store reference for use in fallback
+                (sessionDescriptionHandler as any)._patientRemoteStream = patientRemoteStream;
+              } else {
+                console.log('⏳ Patient: SessionDescriptionHandler not ready yet, state:', state);
+              }
+            } else if (state === SessionState.Established) {
               setStatus('in-call');
               callTimer.current = setInterval(() => setCallDuration(d => d + 1), 1000);
               
@@ -491,6 +686,45 @@ const WaitForCallProfile: React.FC = () => {
                     localVideoRef.current.srcObject = localStreamRef.current;
                     localVideoRef.current.play().catch(console.error);
                   }
+                }
+                
+                // CRITICAL: Ensure remote audio is working when call is established
+                console.log('🔊 Patient: Call established - checking remote audio playback...');
+                if (remoteVideoRef.current && remoteVideoRef.current.srcObject) {
+                  const stream = remoteVideoRef.current.srcObject as MediaStream;
+                  const audioTracks = stream.getAudioTracks();
+                  console.log('🔊 Patient: Remote stream has', audioTracks.length, 'audio tracks');
+                  
+                  audioTracks.forEach((track, index) => {
+                    console.log(`🔊 Patient: Audio track ${index}:`, {
+                      enabled: track.enabled,
+                      readyState: track.readyState,
+                      muted: track.muted,
+                      label: track.label
+                    });
+                  });
+                  
+                  // Ensure video element is not muted and volume is up
+                  remoteVideoRef.current.muted = false;
+                  remoteVideoRef.current.volume = 1.0;
+                  
+                  // Force play if not already playing
+                  if (remoteVideoRef.current.paused) {
+                    console.log('🔊 Patient: Remote video is paused, forcing play...');
+                    remoteVideoRef.current.play().then(() => {
+                      console.log('✅ Patient: Remote audio/video forced to play successfully');
+                    }).catch((error) => {
+                      console.error('❌ Patient: Failed to force play remote audio/video:', error);
+                      if (error.name === 'NotAllowedError' || error.message.includes('play')) {
+                        console.log('🔴 Patient: Autoplay blocked during call establishment - showing unlock button');
+                        setNeedsAudioUnlock(true);
+                      }
+                    });
+                  } else {
+                    console.log('✅ Patient: Remote video is already playing');
+                  }
+                } else {
+                  console.error('❌ Patient: No remote stream available when call established');
                 }
               }, 100);
               
@@ -524,17 +758,49 @@ const WaitForCallProfile: React.FC = () => {
                 }
               }
             } else if (state === SessionState.Terminated) {
-              setStatus('waiting');
+              console.log('📞 Call terminated, cleaning up and returning to welcome page');
+              
+              // Clear call duration and timer
               setCallDuration(0);
               if (callTimer.current) clearInterval(callTimer.current);
               
-              // Don't clear local video when call ends, keep it for preview
+              // Clear remote video when call ends
               if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
               
-              // Keep local stream active for preview
+              // Stop and clear local stream completely
               if (localStreamRef.current) {
-                setHasLocalStream(true);
+                localStreamRef.current.getTracks().forEach(track => track.stop());
+                localStreamRef.current = null;
               }
+              
+              // Clear video elements
+              if (localVideoRef.current) {
+                localVideoRef.current.srcObject = null;
+              }
+              if (localVideoCallRef.current) {
+                localVideoCallRef.current.srcObject = null;
+              }
+              
+              // Clear local video preview
+              setHasLocalStream(false);
+              
+              // Clean up SIP session
+              sessionRef.current = null;
+              
+              // Unregister and clean up SIP connection
+              if (registererRef.current) {
+                registererRef.current.unregister().catch(console.error);
+                registererRef.current = null;
+              }
+              
+              if (userAgentRef.current) {
+                userAgentRef.current.stop();
+                userAgentRef.current = null;
+              }
+              
+              // Return to idle/welcome state
+              setStatus('idle');
+              setError(null);
             }
           });
 
@@ -572,6 +838,13 @@ const WaitForCallProfile: React.FC = () => {
   };
 
   const handleLeave = async () => {
+    if (sessionRef.current) {
+      try {
+        sessionRef.current.bye();
+      } catch (err) {
+        console.error('Failed to end call:', err);
+      }
+    }
     if (registererRef.current) {
       try {
         await registererRef.current.unregister();
@@ -593,10 +866,14 @@ const WaitForCallProfile: React.FC = () => {
       }
       localStreamRef.current = null;
     }
+    if (callTimer.current) {
+      clearInterval(callTimer.current);
+    }
     setStatus('idle');
     setHasLocalStream(false);
     setIsTestingDevices(false);
     setError(null);
+    setCallDuration(0);
   };
 
   // Show local video in waiting state too
@@ -614,21 +891,26 @@ const WaitForCallProfile: React.FC = () => {
     >
       <Box 
         sx={{
-          p: 4,
-          maxWidth: showLocalVideo ? 800 : 400,
+          p: { xs: 2, sm: 3, md: 4 },
+          maxWidth: showLocalVideo ? { xs: '100%', sm: 600, md: 800 } : { xs: '100%', sm: 400 },
           width: '100%',
           textAlign: 'center',
           bgcolor: 'white',
           borderRadius: 2,
-          boxShadow: 1
+          boxShadow: 1,
+          mx: { xs: 1, sm: 2 }
         }}
       >
-        <Typography variant="h4" gutterBottom>
-          Welcome
-        </Typography>
-        <Typography variant="h5" gutterBottom color="primary" sx={{ mb: 3 }}>
-          {clientName}
-        </Typography>
+        {status !== 'in-call' && (
+          <>
+            <Typography variant="h4" gutterBottom>
+              Welcome
+            </Typography>
+            <Typography variant="h5" gutterBottom color="primary" sx={{ mb: 3 }}>
+              {clientName}
+            </Typography>
+          </>
+        )}
 
         {status === 'idle' && (
           <Box display="flex" flexDirection="column" alignItems="center" gap={3}>
@@ -716,24 +998,92 @@ const WaitForCallProfile: React.FC = () => {
         )}
 
         {status === 'in-call' && (
-          <Box display="flex" flexDirection="column" alignItems="center" gap={2}>
-            <Typography variant="h6" color="primary">
-              In video call with doctor
-            </Typography>
-            <Typography variant="body1" mb={2}>
-              Duration: {callDuration}s
-            </Typography>
+          <Box display="flex" flexDirection="column" alignItems="center" gap={3}>
+            {/* Header with welcome, name, and connection status horizontal */}
+            <Box display="flex" alignItems="center" gap={2} mb={1} sx={{ flexWrap: 'wrap', justifyContent: 'center' }}>
+              <Typography variant="h5" sx={{ display: { xs: 'none', sm: 'block' } }}>
+                Welcome
+              </Typography>
+              <Typography variant="h5" color="primary" sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }}>
+                {clientName}
+              </Typography>
+              <Typography variant="h6" color="success.main" sx={{ fontSize: { xs: '0.875rem', sm: '1rem' }, fontWeight: 'medium' }}>
+                • Connected to doctor
+              </Typography>
+            </Box>
             
-            <Box display="flex" gap={2} justifyContent="center" width="100%">
-              <Box>
-                <Typography variant="caption" display="block" mb={1}>Your camera</Typography>
+            {/* Audio Unlock Banner */}
+            {needsAudioUnlock && (
+              <Box sx={{
+                width: '100%',
+                maxWidth: 600,
+                bgcolor: 'warning.light',
+                border: '2px solid',
+                borderColor: 'warning.main',
+                borderRadius: 2,
+                p: 2,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 2,
+                animation: 'pulse 2s infinite'
+              }}>
+                <VolumeUpIcon color="warning" sx={{ fontSize: '2rem' }} />
+                <Box sx={{ flex: 1 }}>
+                  <Typography variant="h6" color="warning.dark" gutterBottom>
+                    Audio Blocked
+                  </Typography>
+                  <Typography variant="body2" color="warning.dark">
+                    Click the button below to enable audio and hear the doctor
+                  </Typography>
+                </Box>
+                <Button
+                  variant="contained"
+                  color="warning"
+                  size="large"
+                  startIcon={<PlayArrowIcon />}
+                  onClick={enableAudioPlayback}
+                  sx={{
+                    minWidth: 160,
+                    fontWeight: 'bold',
+                    textTransform: 'none'
+                  }}
+                >
+                  Enable Audio
+                </Button>
+              </Box>
+            )}
+            
+            {/* Main video layout */}
+            <Box 
+              display="flex" 
+              gap={{ xs: 1, sm: 2, md: 3 }} 
+              alignItems="flex-start" 
+              width="100%"
+              sx={{ 
+                flexDirection: { xs: 'column', md: 'row' },
+                alignItems: { xs: 'center', md: 'flex-start' }
+              }}
+            >
+              {/* Your video (picture-in-picture style) with timer below */}
+              <Box 
+                display="flex" 
+                flexDirection="column" 
+                alignItems="center" 
+                gap={2}
+                sx={{ 
+                  order: { xs: 2, md: 1 },
+                  width: { xs: '100%', md: 'auto' }
+                }}
+              >
                 <Box sx={{
-                  width: 240,
-                  height: 180,
+                  width: { xs: 150, sm: 180, md: 200 },
+                  height: { xs: 112, sm: 135, md: 150 },
                   backgroundColor: '#000',
-                  border: '1px solid #ccc',
-                  borderRadius: 1,
-                  overflow: 'hidden'
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                  position: 'relative',
+                  border: '2px solid',
+                  borderColor: 'primary.main'
                 }}>
                   <video 
                     ref={localVideoCallRef}
@@ -746,30 +1096,168 @@ const WaitForCallProfile: React.FC = () => {
                       objectFit: 'cover'
                     }} 
                   />
+                  <Typography 
+                    variant="caption" 
+                    sx={{
+                      position: 'absolute',
+                      bottom: 4,
+                      left: 4,
+                      color: 'white',
+                      bgcolor: 'rgba(0,0,0,0.6)',
+                      px: 0.5,
+                      py: 0.25,
+                      borderRadius: 0.5,
+                      fontSize: { xs: '0.625rem', sm: '0.75rem' }
+                    }}
+                  >
+                    You
+                  </Typography>
+                </Box>
+                
+                {/* Timer below your video */}
+                <Box sx={{ 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: 1,
+                  bgcolor: 'grey.100',
+                  px: { xs: 1.5, sm: 2 },
+                  py: { xs: 0.75, sm: 1 },
+                  borderRadius: 2
+                }}>
+                  <Box sx={{
+                    width: { xs: 6, sm: 8 },
+                    height: { xs: 6, sm: 8 },
+                    borderRadius: '50%',
+                    bgcolor: 'success.main',
+                    animation: 'pulse 2s infinite'
+                  }} />
+                  <Typography 
+                    variant="body2" 
+                    fontWeight="medium" 
+                    color="text.primary"
+                    sx={{ fontSize: { xs: '0.75rem', sm: '0.875rem' } }}
+                  >
+                    {Math.floor(callDuration / 3600) > 0 
+                      ? `${Math.floor(callDuration / 3600)}:${Math.floor((callDuration % 3600) / 60).toString().padStart(2, '0')}:${(callDuration % 60).toString().padStart(2, '0')}`
+                      : `${Math.floor(callDuration / 60)}:${(callDuration % 60).toString().padStart(2, '0')}`
+                    }
+                  </Typography>
                 </Box>
               </Box>
-              <Box>
-                <Typography variant="caption" display="block" mb={1}>Doctor's camera</Typography>
+              
+              {/* Doctor's main video */}
+              <Box 
+                sx={{ 
+                  flex: 1,
+                  order: { xs: 1, md: 2 },
+                  width: { xs: '100%', md: 'auto' }
+                }}
+              >
                 <Box sx={{
-                  width: 480,
-                  height: 360,
+                  width: '100%',
+                  height: { xs: 240, sm: 300, md: 360 },
                   backgroundColor: '#000',
-                  border: '1px solid #ccc',
-                  borderRadius: 1,
-                  overflow: 'hidden'
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                  position: 'relative'
                 }}>
                   <video 
                     ref={remoteVideoRef}
                     autoPlay 
                     playsInline
+                    controls={false}
                     style={{ 
                       width: '100%',
                       height: '100%',
                       objectFit: 'cover'
                     }} 
                   />
+                  <Typography 
+                    variant="caption" 
+                    sx={{
+                      position: 'absolute',
+                      bottom: { xs: 4, sm: 8 },
+                      left: { xs: 4, sm: 8 },
+                      color: 'white',
+                      bgcolor: 'rgba(0,0,0,0.6)',
+                      px: { xs: 0.5, sm: 1 },
+                      py: { xs: 0.25, sm: 0.5 },
+                      borderRadius: 1,
+                      fontSize: { xs: '0.625rem', sm: '0.75rem' }
+                    }}
+                  >
+                    Doctor
+                  </Typography>
                 </Box>
               </Box>
+            </Box>
+            
+            {/* Control buttons - mute, camera, and hangup in a row */}
+            <Box 
+              display="flex" 
+              gap={{ xs: 2, sm: 3 }} 
+              alignItems="center"
+              sx={{ mt: { xs: 1, sm: 2 } }}
+            >
+              {/* Mute button */}
+              <IconButton
+                color={isMuted ? "error" : "primary"}
+                size="large"
+                onClick={toggleMute}
+                sx={{
+                  width: { xs: 48, sm: 56 },
+                  height: { xs: 48, sm: 56 },
+                  bgcolor: isMuted ? 'error.main' : 'primary.main',
+                  color: 'white',
+                  '&:hover': {
+                    bgcolor: isMuted ? 'error.dark' : 'primary.dark'
+                  }
+                }}
+              >
+                {isMuted ? 
+                  <MicOffIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} /> : 
+                  <MicIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} />
+                }
+              </IconButton>
+
+              {/* Camera button */}
+              <IconButton
+                color={isCameraDisabled ? "error" : "primary"}
+                size="large"
+                onClick={toggleCamera}
+                sx={{
+                  width: { xs: 48, sm: 56 },
+                  height: { xs: 48, sm: 56 },
+                  bgcolor: isCameraDisabled ? 'error.main' : 'primary.main',
+                  color: 'white',
+                  '&:hover': {
+                    bgcolor: isCameraDisabled ? 'error.dark' : 'primary.dark'
+                  }
+                }}
+              >
+                {isCameraDisabled ? 
+                  <VideocamOffIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} /> : 
+                  <VideocamIcon sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' } }} />
+                }
+              </IconButton>
+
+              {/* Hangup button */}
+              <IconButton
+                color="error"
+                size="large"
+                onClick={handleLeave}
+                sx={{
+                  width: { xs: 56, sm: 64 },
+                  height: { xs: 56, sm: 64 },
+                  bgcolor: 'error.main',
+                  color: 'white',
+                  '&:hover': {
+                    bgcolor: 'error.dark'
+                  }
+                }}
+              >
+                <CallEndIcon sx={{ fontSize: { xs: '1.5rem', sm: '2rem' } }} />
+              </IconButton>
             </Box>
           </Box>
         )}
@@ -890,17 +1378,51 @@ const WaitForCallProfile: React.FC = () => {
               )}
             </Box>
           </DialogContent>
-          <DialogActions>
-            <Button onClick={closeTestDialog}>
-              Cancel
-            </Button>
-            <Button 
-              onClick={applyDeviceSettings} 
-              variant="contained"
-              disabled={!localStreamRef.current}
-            >
-              Use These Settings
-            </Button>
+          <DialogActions sx={{ justifyContent: 'space-between', px: 3, py: 2 }}>
+            <Box display="flex" gap={1}>
+              {/* Mute toggle in test dialog */}
+              <IconButton
+                color={isMuted ? "error" : "primary"}
+                onClick={toggleMute}
+                sx={{
+                  bgcolor: isMuted ? 'error.light' : 'primary.light',
+                  '&:hover': {
+                    bgcolor: isMuted ? 'error.main' : 'primary.main',
+                    color: 'white'
+                  }
+                }}
+              >
+                {isMuted ? <MicOffIcon /> : <MicIcon />}
+              </IconButton>
+
+              {/* Camera toggle in test dialog */}
+              <IconButton
+                color={isCameraDisabled ? "error" : "primary"}
+                onClick={toggleCamera}
+                sx={{
+                  bgcolor: isCameraDisabled ? 'error.light' : 'primary.light',
+                  '&:hover': {
+                    bgcolor: isCameraDisabled ? 'error.main' : 'primary.main',
+                    color: 'white'
+                  }
+                }}
+              >
+                {isCameraDisabled ? <VideocamOffIcon /> : <VideocamIcon />}
+              </IconButton>
+            </Box>
+
+            <Box display="flex" gap={1}>
+              <Button onClick={closeTestDialog}>
+                Cancel
+              </Button>
+              <Button 
+                onClick={applyDeviceSettings} 
+                variant="contained"
+                disabled={!localStreamRef.current}
+              >
+                Use These Settings
+              </Button>
+            </Box>
           </DialogActions>
         </Dialog>
 
